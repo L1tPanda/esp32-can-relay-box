@@ -1,4 +1,4 @@
-// CAN relay box – ESP32 + CAN transceiver (e.g. SN65HVD230) switching relays / MOSFETs from CAN frames.
+// CAN relay box – ESP32 + CAN transceiver (e.g. SN65HVD230) switching MOSFETs / relays from CAN frames.
 // Works with any CAN system: ids, bitrate, which byte/bit drives each output, status frame, timeout,
 // and the board's pins are all set from the serial console and saved on the board (no recompiling).
 //
@@ -8,7 +8,7 @@
 //              states kept through power cycles.
 //   generic    500 kbps, commands 0x700 bytes 0-3 (non-zero = on), no sync bit, status 0x701 at 10 Hz,
 //              outputs off at power-up and released if no command for 1 s.
-//   Boards: "board a2" (KinCony KC868-A2: relays 15/2, inputs 36/39, CAN on the I2C header 4/16).
+//   Boards: "board mos4" (ESP32 Quad MOS Switch Module; find the output GPIOs with "scan").
 //
 // How it works
 //   Command frame (cmd_id): output N is ON when (byte out_byteN & out_maskN) != 0 (or == 0 if inverted).
@@ -53,11 +53,16 @@ uint32_t inputsChanged = 0;
 String line;
 
 // ---------------------------------------------------------------- presets
-void boardA2(Config &c) {
-  const int8_t outs[N] = {15, 2, -1, -1}, ins[N] = {36, 39, -1, -1};
-  for (int i = 0; i < N; i++) { c.out_pin[i] = outs[i]; c.in_pin[i] = ins[i]; }
+// ESP32 Quad MOS Switch Module (ESP32-32E, 4 low-side MOSFET outputs, 5-60 V).
+// Output GPIOs aren't published: find them with "scan", then "set outN_pin". Until then they're -1.
+// Inputs: GPIO34/35 (input-only pins) through a 47k/10k divider + 3.3 V clamp; a relay coil's low
+// side reads LOW when the coil is on, so active low. CAN: transceiver on GPIO22 (TX) / GPIO21 (RX)
+// unless "scan" shows a MOSFET on one of them.
+void boardMos4(Config &c) {
+  const int8_t ins[N] = {34, 35, -1, -1};
+  for (int i = 0; i < N; i++) { c.out_pin[i] = -1; c.in_pin[i] = ins[i]; }
   c.in_active_low = 1;
-  c.can_tx = 4; c.can_rx = 16;     // I2C header: SDA -> module CTX, SCL -> module CRX
+  c.can_tx = 22; c.can_rx = 21;
 }
 
 void presetPowertune(Config &c) {
@@ -82,7 +87,7 @@ void factoryDefaults(Config &c) {
   memset(&c, 0, sizeof(c));
   c.version = CFG_VERSION;
   presetPowertune(c);
-  boardA2(c);
+  boardMos4(c);
 }
 
 // ---------------------------------------------------------------- outputs, inputs, storage
@@ -226,19 +231,44 @@ void selfTest() {
   startCan(TWAI_MODE_NORMAL);
 }
 
+// Finds which GPIO drives each output: pulses every GPIO that can be an output, one at a time, for
+// 1.5 s, and prints its number. Watch the output LEDs (or a test lamp / meter on OUT+ and OUT-).
+// Disconnect real loads first. Skips flash/serial pins and the CAN pins.
+void scan() {
+  const int8_t cand[] = {2, 4, 5, 12, 13, 14, 15, 16, 17, 18, 19, 21, 22, 23, 25, 26, 27, 32, 33};
+  if (canUp) { twai_stop(); twai_driver_uninstall(); canUp = false; }
+  Serial.println("scan: watch the output LEDs. Each GPIO goes HIGH for 1.5 s. Loads disconnected!");
+  for (int8_t p : cand) {
+    if (p == cfg.can_tx || p == cfg.can_rx) continue;
+    bool isOut = false;
+    for (int i = 0; i < N; i++) if (cfg.out_pin[i] == p) isOut = true;
+    Serial.printf("GPIO%d HIGH%s\n", p, isOut ? " (already set as an output)" : "");
+    pinMode(p, OUTPUT);
+    digitalWrite(p, HIGH);
+    delay(1500);
+    digitalWrite(p, LOW);
+    if (!isOut) pinMode(p, INPUT);
+    delay(300);
+  }
+  Serial.println("scan done. Set the pins with: set out1_pin <GPIO> (and out2..out4)");
+  apply();
+  startCan(TWAI_MODE_NORMAL);
+}
+
 void help() {
   Serial.println(
     "on N | off N            switch output N (1-4) by hand; saved\n"
     "status                  outputs, inputs, CAN\n"
     "config                  show settings\n"
     "preset powertune|generic  load a CAN setup (keeps the board pins)\n"
-    "board a2                load the KC868-A2 pins\n"
+    "board mos4              load the ESP32 Quad MOS Switch Module pins (inputs, CAN)\n"
+    "scan                    pulse each GPIO in turn to find which drives each output\n"
     "set <key> <value>       change a setting, saved straight away. Keys:\n"
     "    bitrate 125|250|500|1000   cmd_id 0x6A1   cmd_ext 0|1   status_id 0x6A2   status_ext 0|1\n"
     "    status_ms 100 (0 = off)    sync_byte 4    sync_mask 0x01 (0 = off)    timeout_ms 0 (0 = keep)\n"
-    "    outN_byte 0-7   outN_mask 0x01   outN_invert 0|1   outN_restore 0|1   outN_pin 15 (-1 = none)\n"
-    "    inN_pin 36 (-1 = none)   in_active_low 0|1   can_tx 4   can_rx 16\n"
-    "factory                 back to factory defaults (powertune + board a2)\n"
+    "    outN_byte 0-7   outN_mask 0x01   outN_invert 0|1   outN_restore 0|1   outN_pin 16 (-1 = none)\n"
+    "    inN_pin 34 (-1 = none)   in_active_low 0|1   can_tx 22   can_rx 21\n"
+    "factory                 back to factory defaults (powertune + board mos4)\n"
     "selftest                CAN transceiver loop-back test\n"
     "reboot");
 }
@@ -289,6 +319,7 @@ void command(String c) {
   else if (cmd == "status") status();
   else if (cmd == "config") showConfig();
   else if (cmd == "selftest") selfTest();
+  else if (cmd == "scan") scan();
   else if (cmd == "reboot") ESP.restart();
   else if (cmd == "factory") { factoryDefaults(cfg); saveConfig(); Serial.println("factory defaults - rebooting"); delay(100); ESP.restart(); }
   else if (cmd == "preset") {
@@ -298,7 +329,7 @@ void command(String c) {
     saveConfig(); startCan(TWAI_MODE_NORMAL); showConfig();
   }
   else if (cmd == "board") {
-    if (arg == "a2") boardA2(cfg); else { Serial.println("boards: a2 (or set the pins with set)"); return; }
+    if (arg == "mos4") boardMos4(cfg); else { Serial.println("boards: mos4 (or set the pins with set)"); return; }
     saveConfig(); Serial.println("pins saved - rebooting"); delay(100); ESP.restart();
   }
   else if (cmd == "set") {

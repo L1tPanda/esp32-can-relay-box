@@ -1,6 +1,6 @@
 # ESP32 CAN relay box
 
-An ESP32 board with relays (or MOSFETs) and a CAN transceiver that switches its outputs from CAN
+An ESP32 board with MOSFETs (or relays) and a CAN transceiver that switches its outputs from CAN
 frames, and reports its output states and sensed inputs back on the bus. Use it to give any CAN
 device (a dash, a keypad, a PLC, a CAN tool) real switched outputs: a map switch, a fan override,
 lights, a pump.
@@ -19,8 +19,6 @@ lights, a pump.
 Unofficial and not affiliated with any of the devices it's used with. If you connect it to engine
 management or other safety-related wiring, that's at your own risk: test on the bench first.
 Licensed GPL-3.
-
-![Open box](enclosure/preview_open.png)
 
 ## How it works
 
@@ -68,70 +66,65 @@ states after it boots, and **CAN input 1-4** sources show the sensed inputs (das
 ## Hardware
 
 Any ESP32 with free GPIOs plus a 3.3 V CAN transceiver module (e.g. SN65HVD230: CTX, CRX, 3V3, GND,
-CANH, CANL). Factory pins are for the **KinCony KC868-A2 V2.6** (`board a2`):
+CANH, CANL). The factory pins (`board mos4`) are for the **ESP32 Quad MOS Switch Module**:
+ESP32-32E, four N-channel MOSFET outputs, 5-60 V supply, USB-C, every GPIO on headers.
 
 | | GPIO |
 |---|---|
-| Output 1 / 2 | 15 / 2 (relays) |
-| Input 1 / 2 | 36 / 39 (opto inputs IN1 / IN2, active when pulled to ground) |
-| CAN TX / RX | 4 / 16: the I2C header, SDA → module CTX, SCL → module CRX |
+| Output 1-4 | **not published: find them with `scan`** (see below), then `set out1_pin ..` to `out4_pin` |
+| Input 1 / 2 | 34 / 35 (input-only pins), through a divider (see below), active low |
+| CAN TX / RX | 22 / 21 → module CTX / CRX, plus 3V3 and GND from the header |
 
-Its 3.3 kΩ I2C pull-ups don't affect CAN. On other boards set `outN_pin`, `inN_pin`,
-`in_active_low`, `can_tx` and `can_rx`.
+**Finding the output pins:** disconnect any loads, open the serial console and type `scan`. Each
+GPIO goes high for 1.5 s in turn and its number is printed; note which number lights each output's
+LED (or a test lamp across OUT+ / OUT-). Then `set out1_pin <GPIO>` and so on. If `scan` shows a
+MOSFET on GPIO21 or 22, move CAN to two other free pins with `set can_tx` / `set can_rx`.
+
+**Outputs are low-side:** a MOSFET connects its **OUT−** terminal to ground when on; **OUT+** is the
+supply. Wire whatever needs grounding to OUT−:
+
+- an ECU input that is active low (e.g. a map-select input): ECU pin → OUT−. The ECU's own pull-up
+  does the rest; leave OUT+ unconnected.
+- a relay coil: coil from switched +12 V to OUT−. Power the board from the same switched +12 V.
+
+Check with a meter that OUT− really is the switched side before wiring a car to it.
 
 **Bus termination:** with everything off, measure CAN-H to CAN-L. About 60 Ω means the bus is
 already terminated at both ends, so remove the module's 120 Ω resistor (usually marked "121").
 
-**Example (MX-5 with a Motorsport Electronics ME442):** output 1 grounds the ECU's map-select input
-(active low) for map 2; output 2 grounds the fan relay coil in parallel with the ECU; input 1 watches
-the map-select line and input 2 the fan relay coil, so the dash can show "fan running" even when the
-ECU switched it on.
+**Example (MX-5 with a Motorsport Electronics ME442):** output 1 (OUT−) grounds the ECU's map-select
+input (active low) for map 2; output 2 (OUT−) grounds the fan relay coil in parallel with the ECU;
+input 2 watches the fan relay coil, so the dash can show "fan running" even when the ECU switched it
+on.
 
-### Protecting the inputs (12-14.4 V vehicles)
+### Sensed inputs and protection (12-14.4 V vehicles)
 
-The KC868-A2's IN1/IN2 are **dry-contact** opto inputs: the board feeds the optocoupler from its own
-supply and the input is "active" when something pulls it to ground. They aren't meant to have a
-voltage fed in, and KinCony publishes no voltage rating. Steady battery voltage (14.4 V running) on
-an input is harmless when the A2 runs from the same supply. The danger is **switching spikes**: when
-a relay coil is switched off, its low side can jump to tens of volts or more for a moment.
-
-**Sensing a relay coil (e.g. the fan relay, switched to ground by the ECU):** fit both diodes.
+ESP32 pins take 3.3 V at most, so each input goes through a divider with a clamp. GPIO34/35 are
+input-only pins with no internal pull-ups, which suits this.
 
 ```
-   +12V (switched) ───────┬──────────────┐
-                          │              │
-                     relay coil     flyback diode 1N4007
-                          │           (band towards +12V)
-                          │              │
-   ECU output (to GND) ───┴──────────────┘ ◄── coil low side
-                          │
-                          │  1N4007, band (cathode) towards the coil
-                          ▼
-                     A2 IN2 (anode side)
+  signal ──[ 47 kΩ ]──┬──────────────► GPIO34 (input 1) / GPIO35 (input 2)
+                      │
+                   [ 10 kΩ ]   3.3 V zener (or BAT54S to 3V3 and GND)
+                      │              │
+  GND ────────────────┴──────────────┘
 ```
 
-- **Series diode** (1N4007, or 1N4148 for short wires): anode on the A2 input, cathode (band) on
-  the coil's low side. When the ECU grounds the coil, the input still pulls to ground through the
-  diode (about 0.7 V drop, still reads active). When the coil is off or spiking, the diode blocks
-  it (1N4007: 1000 V).
-- **Flyback diode across the coil** (1N4007, band towards +12 V), or use a relay with a built-in
-  diode. It stops the spike at its source and protects the ECU's output too. Skip it if the relay
-  already has one (check the relay's diagram, or measure across pins 85/86).
+14.4 V becomes about 2.5 V at the pin (reads high); a grounded signal reads low. The 47 kΩ limits
+the current from spikes and the clamp holds the pin at 3.3 V, so a relay coil's switch-off spike
+can't reach the ESP32. A 100 nF capacitor across the 10 kΩ filters noise if the wires are long.
 
-**Sensing an ECU input with its own pull-up (e.g. a 5 V map-select input):** check before you rely
-on it. The A2 input sits near its supply voltage, so it can push current into the ECU's input, which
-may read wrong or make the box's input read active all the time. A series diode doesn't help here
-(it points the wrong way). Measure the ECU input's voltage with the A2 input connected and
-disconnected; if it changes, or the box shows the input active when it shouldn't be, leave that
-input unconnected.
+- **Sensing a relay coil switched to ground** (e.g. the fan relay, by the ECU): connect the coil's
+  low side as the signal. It reads low when the coil is on, so keep `in_active_low 1`.
+- **Flyback diode across the coil** (1N4007, band towards +12 V), unless the relay already has one
+  (check its diagram). It stops the switch-off spike at the source and protects the ECU's output
+  and the MOSFET.
+- **Sensing a line with its own pull-up** (e.g. a 5 V ECU input): 5 V gives about 0.9 V through
+  this divider, which won't read high. Use 10 kΩ / 10 kΩ for 5 V signals, or skip it: the box
+  already knows what it drives.
 
-**Powering the box from the vehicle:** use a fused, ignition-switched supply. A TVS diode across the
-supply input (e.g. SMBJ24A, band to +) clamps load-dump spikes. The A2's input capacitors are 35 V
-parts.
-
-**Boards without opto inputs:** feed the signal to a spare GPIO through a divider (47 kΩ from the
-signal, 10 kΩ to GND: 14.4 V → 2.5 V) with a 3.3 V zener or a BAT54S clamp at the GPIO, and set
-`in_active_low` to suit (a coil's low side reads low when the coil is on).
+**Powering the box from the vehicle:** a fused, ignition-switched supply. A TVS diode across the
+supply input (e.g. SMBJ24A, band to +) clamps load-dump spikes.
 
 ## Firmware (`firmware/can_relay`)
 
@@ -153,11 +146,12 @@ Back up the board first if it holds anything you want to keep:
 | `status` | outputs, inputs, CAN state and error counters, command frames seen |
 | `config` | show all settings |
 | `preset powertune` / `preset generic` | load a CAN setup |
-| `board a2` | load the KC868-A2 pins |
+| `board mos4` | load the Quad MOS Switch Module pins (inputs, CAN) |
+| `scan` | pulse each GPIO in turn to find which one drives each output |
 | `set <key> <value>` | change a setting (saved straight away; numbers in decimal or `0x..`) |
 | `on N` / `off N` | switch output N by hand (saved) |
 | `selftest` | sends 5 frames out through the transceiver and reads them back: proves the wiring with no other node on the bus |
-| `factory` | back to factory defaults (`powertune` + `board a2`) |
+| `factory` | back to factory defaults (`powertune` + `board mos4`) |
 | `reboot` | restart |
 
 Settings:
@@ -189,11 +183,11 @@ set out2_mask 0x02
 
 ## Enclosure (`enclosure/`)
 
-OpenSCAD source (`can_relay_box.scad`, parametric) and ready STLs for the KC868-A2:
-**125 × 111 × 34 mm**, 4 slotted mounting ears and 2 strap slots. All wires leave through one M16
-gland next to the USB-C slot (reflash with the lid on); the relay wires run along a channel at the
-top edge. Zip-tie bridges take the strain off soldered joints. Print in PETG or ASA, not PLA, if it
-goes in a car. Build notes: [`enclosure/PRINT_NOTES.md`](enclosure/PRINT_NOTES.md).
+The OpenSCAD source (`can_relay_box.scad`) is parametric: board size, mounting holes, cable entry,
+USB slot, CAN module cradle, mounting ears and strap slots. The current files are laid out for an
+earlier board (KinCony KC868-A2); a version for the Quad MOS Switch Module will follow once that
+board has been measured. Print in PETG or ASA, not PLA, if it goes in a car. Build notes:
+[`enclosure/PRINT_NOTES.md`](enclosure/PRINT_NOTES.md).
 
 ## Testing without hardware
 
