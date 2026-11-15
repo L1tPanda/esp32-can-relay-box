@@ -1,0 +1,8 @@
+# flash backups (may hold Wi-Fi passwords and other projects' firmware)
+a2-backup/
+*.bin
+# build output
+firmware/build/
+# old print-only measuring sheet
+enclosure/measure_sheet_print.html
+enclosure/measure_sheet.html
