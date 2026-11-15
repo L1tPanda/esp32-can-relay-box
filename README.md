@@ -87,6 +87,52 @@ already terminated at both ends, so remove the module's 120 Ω resistor (usually
 the map-select line and input 2 the fan relay coil, so the dash can show "fan running" even when the
 ECU switched it on.
 
+### Protecting the inputs (12-14.4 V vehicles)
+
+The KC868-A2's IN1/IN2 are **dry-contact** opto inputs: the board feeds the optocoupler from its own
+supply and the input is "active" when something pulls it to ground. They aren't meant to have a
+voltage fed in, and KinCony publishes no voltage rating. Steady battery voltage (14.4 V running) on
+an input is harmless when the A2 runs from the same supply. The danger is **switching spikes**: when
+a relay coil is switched off, its low side can jump to tens of volts or more for a moment.
+
+**Sensing a relay coil (e.g. the fan relay, switched to ground by the ECU):** fit both diodes.
+
+```
+   +12V (switched) ───────┬──────────────┐
+                          │              │
+                     relay coil     flyback diode 1N4007
+                          │           (band towards +12V)
+                          │              │
+   ECU output (to GND) ───┴──────────────┘ ◄── coil low side
+                          │
+                          │  1N4007, band (cathode) towards the coil
+                          ▼
+                     A2 IN2 (anode side)
+```
+
+- **Series diode** (1N4007, or 1N4148 for short wires): anode on the A2 input, cathode (band) on
+  the coil's low side. When the ECU grounds the coil, the input still pulls to ground through the
+  diode (about 0.7 V drop, still reads active). When the coil is off or spiking, the diode blocks
+  it (1N4007: 1000 V).
+- **Flyback diode across the coil** (1N4007, band towards +12 V), or use a relay with a built-in
+  diode. It stops the spike at its source and protects the ECU's output too. Skip it if the relay
+  already has one (check the relay's diagram, or measure across pins 85/86).
+
+**Sensing an ECU input with its own pull-up (e.g. a 5 V map-select input):** check before you rely
+on it. The A2 input sits near its supply voltage, so it can push current into the ECU's input, which
+may read wrong or make the box's input read active all the time. A series diode doesn't help here
+(it points the wrong way). Measure the ECU input's voltage with the A2 input connected and
+disconnected; if it changes, or the box shows the input active when it shouldn't be, leave that
+input unconnected.
+
+**Powering the box from the vehicle:** use a fused, ignition-switched supply. A TVS diode across the
+supply input (e.g. SMBJ24A, band to +) clamps load-dump spikes. The A2's input capacitors are 35 V
+parts.
+
+**Boards without opto inputs:** feed the signal to a spare GPIO through a divider (47 kΩ from the
+signal, 10 kΩ to GND: 14.4 V → 2.5 V) with a 3.3 V zener or a BAT54S clamp at the GPIO, and set
+`in_active_low` to suit (a coil's low side reads low when the coil is on).
+
 ## Firmware (`firmware/can_relay`)
 
 Arduino, ESP32 core 3.x. With [arduino-cli](https://arduino.github.io/arduino-cli/):
