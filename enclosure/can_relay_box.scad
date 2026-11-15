@@ -1,5 +1,5 @@
 // CAN relay box – enclosure for a KinCony KC868-A2 V2.6 + SN65HVD230 CAN module
-// Follows the dash's MAP / FAN buttons (CAN 0x6A1) with the A2's two relays.
+// Switches the A2's two relays from CAN frames (see the firmware README).
 // Green terminal blocks removed; wires are soldered to the pads.
 //
 // Board coordinates: origin = bottom-left corner of the board, laid as in the photo

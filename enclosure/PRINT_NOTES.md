@@ -1,7 +1,7 @@
 # CAN relay box enclosure – print and build notes
 
-Case for a **KinCony KC868-A2 (V2.6)** plus an **SN65HVD230** CAN module. It follows the dash's
-MAP / FAN buttons (CAN `0x6A1`) with the A2's two relays. The green terminal blocks are removed
+Case for a **KinCony KC868-A2 (V2.6)** plus an **SN65HVD230** CAN module. It switches the A2's
+two relays from CAN frames. The green terminal blocks are removed
 and the wires are soldered to the pads.
 
 **Outside: 125 × 111 × 34 mm**, plus 13 mm mounting ears top and bottom.
